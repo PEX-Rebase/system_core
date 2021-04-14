@@ -396,6 +396,13 @@ static int show_help() {
             " gsi wipe|disable           Wipe or disable a GSI installation (fastbootd only).\n"
             " wipe-super [SUPER_EMPTY]   Wipe the super partition. This will reset it to\n"
             "                            contain an empty set of default dynamic partitions.\n"
+            " create-logical-partition NAME SIZE\n"
+            "                            Create a logical partition with the given name and\n"
+            "                            size, in the super partition.\n"
+            " delete-logical-partition NAME\n"
+            "                            Delete a logical partition with the given name.\n"
+            " resize-logical-partition NAME SIZE\n"
+            "                            Change the size of the named logical partition.\n"
             " snapshot-update cancel     On devices that support snapshot-based updates, cancel\n"
             "                            an in-progress update. This may make the device\n"
             "                            unbootable until it is reflashed.\n"
@@ -986,6 +993,11 @@ static bool has_vbmeta_partition() {
            fb->GetVar("partition-type:vbmeta_b", &partition_type) == fastboot::SUCCESS;
 }
 
+static bool is_logical(const std::string& partition) {
+    std::string value;
+    return fb->GetVar("is-logical:" + partition, &value) == fastboot::SUCCESS && value == "yes";
+}
+
 static std::string fb_fix_numeric_var(std::string var) {
     // Some bootloaders (angler, for example), send spurious leading whitespace.
     var = android::base::Trim(var);
@@ -1002,19 +1014,19 @@ static void copy_boot_avb_footer(const std::string& partition, struct fastboot_b
 
     std::string partition_size_str;
     if (fb->GetVar("partition-size:" + partition, &partition_size_str) != fastboot::SUCCESS) {
-        die("cannot get boot partition size");
+        if (!is_logical(partition)) {
+            return;
+        }
+        die("cannot get partition size for %s", partition.c_str());
     }
 
     partition_size_str = fb_fix_numeric_var(partition_size_str);
     int64_t partition_size;
     if (!android::base::ParseInt(partition_size_str, &partition_size)) {
+        if (!is_logical(partition)) {
+            return;
+        }
         die("Couldn't parse partition size '%s'.", partition_size_str.c_str());
-    }
-    if (partition_size == buf->sz) {
-        return;
-    }
-    if (partition_size < buf->sz) {
-        die("boot partition is smaller than boot image");
     }
 
     std::string data;
@@ -1025,6 +1037,12 @@ static void copy_boot_avb_footer(const std::string& partition, struct fastboot_b
     uint64_t footer_offset = buf->sz - AVB_FOOTER_SIZE;
     if (0 != data.compare(footer_offset, AVB_FOOTER_MAGIC_LEN, AVB_FOOTER_MAGIC)) {
         return;
+    }
+    if (partition_size == buf->sz) {
+        return;
+    }
+    if (partition_size < buf->sz) {
+        die("boot partition is smaller than boot image");
     }
 
     int fd = make_temporary_fd("boot rewriting");
@@ -1215,11 +1233,6 @@ static void do_for_partitions(const std::string& part, const std::string& slot,
     } else {
         do_for_partition(part, slot, func, force_slot);
     }
-}
-
-static bool is_logical(const std::string& partition) {
-    std::string value;
-    return fb->GetVar("is-logical:" + partition, &value) == fastboot::SUCCESS && value == "yes";
 }
 
 static bool is_retrofit_device() {
